@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OCR Application</title>
+    <style>
+        #logo {
+            display: block;
+            margin: auto;
+            width: 100px;
+            height: auto;
+        }
+        #upload {
+            display: block;
+            margin: 20px auto;
+        }
+        #image-container {
+            text-align: center;
+            margin-top: 20px;
+            position: relative;
+        }
+        #uploaded-image {
+            max-width: 80%;
+            height: auto;
+        }
+        #apply-ocr, #save-csv {
+            display: block;
+            margin: 20px auto;
+        }
+        #history {
+            margin-top: 20px;
+            width: 80%;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        #history table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        #history th, #history td {
+            border: 1px solid black;
+            padding: 8px;
+            text-align: left;
+        }
+        #history th {
+            background-color: #f2f2f2;
+        }
+        .delete-btn {
+            cursor: pointer;
+            color: red;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <img id="logo" src="{{ url_for('static', filename='Image Annotation_transparent.png') }}" alt="Logo">
+    <input type="file" id="upload" accept="image/*">
+    <div id="image-container">
+        <img id="uploaded-image" src="#" alt="Uploaded Image">
+        <canvas id="selection-canvas" style="position: absolute; left: 0; top: 0;"></canvas>
+    </div>
+    <button id="apply-ocr">Apply OCR</button>
+    <textarea id="ocr-result" rows="10" cols="50"></textarea>
+    <input type="text" id="annotation" placeholder="Enter annotation">
+    <button id="save-csv">Save to CSV</button>
+    <div id="history">
+        <h2>History</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>OCR Result</th>
+                    <th>Annotation</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="history-body">
+                <!-- History entries will be added here -->
+            </tbody>
+        </table>
+    </div>
+    <script>
+        // Function to get last annotation from local storage
+        function getLastAnnotation() {
+            return localStorage.getItem('lastAnnotation') || '';
+        }
+
+        // Function to save annotation to local storage
+        function saveLastAnnotation(annotation) {
+            localStorage.setItem('lastAnnotation', annotation);
+        }
+
+        let upload = document.getElementById('upload');
+        let uploadedImage = document.getElementById('uploaded-image');
+        let applyOcrButton = document.getElementById('apply-ocr');
+        let ocrResult = document.getElementById('ocr-result');
+        let annotationInput = document.getElementById('annotation');
+        let saveCsvButton = document.getElementById('save-csv');
+        let historyBody = document.getElementById('history-body');
+        let selection = {};
+        let canvas, ctx;
+        let ocrData = [];
+
+        // Set initial value of annotation input
+        annotationInput.value = getLastAnnotation();
+
+        upload.addEventListener('change', function(event) {
+            let file = event.target.files[0];
+            let reader = new FileReader();
+            reader.onload = function(e) {
+                uploadedImage.src = e.target.result;
+                uploadedImage.onload = function() {
+                    createCanvas();
+                }
+            }
+            reader.readAsDataURL(file);
+        });
+
+        function createCanvas() {
+            if (canvas) {
+                canvas.remove();
+            }
+            canvas = document.createElement('canvas');
+            ctx = canvas.getContext('2d');
+            canvas.width = uploadedImage.clientWidth;
+            canvas.height = uploadedImage.clientHeight;
+            canvas.style.position = 'absolute';
+            canvas.style.left = uploadedImage.offsetLeft + 'px';
+            canvas.style.top = uploadedImage.offsetTop + 'px';
+            canvas.id = 'selection-canvas';
+            document.getElementById('image-container').appendChild(canvas);
+
+            canvas.addEventListener('mousedown', startSelection);
+            canvas.addEventListener('mousemove', updateSelection);
+            canvas.addEventListener('mouseup', endSelection);
+        }
+
+        function startSelection(event) {
+            selection.startX = event.offsetX;
+            selection.startY = event.offsetY;
+            selection.width = 0;
+            selection.height = 0;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function updateSelection(event) {
+            if (!selection.startX || !selection.startY) return;
+            if (event.buttons !== 1) return;
+            selection.width = event.offsetX - selection.startX;
+            selection.height = event.offsetY - selection.startY;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(selection.startX, selection.startY, selection.width, selection.height);
+        }
+
+        function endSelection(event) {
+            if (!selection.startX || !selection.startY) return;
+            selection.width = event.offsetX - selection.startX;
+            selection.height = event.offsetY - selection.startY;
+        }
+
+        applyOcrButton.addEventListener('click', function() {
+            let image = uploadedImage.src.split(',')[1];
+            // Scale the selection coordinates to the original image size
+            let scaleX = uploadedImage.naturalWidth / uploadedImage.clientWidth;
+            let scaleY = uploadedImage.naturalHeight / uploadedImage.clientHeight;
+            let scaledSelection = {
+                startX: selection.startX * scaleX,
+                startY: selection.startY * scaleY,
+                width: selection.width * scaleX,
+                height: selection.height * scaleY
+            };
+            fetch('/ocr', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    image: image,
+                    selection: scaledSelection
+                })
+            }).then(response => response.json())
+              .then(data => {
+                  ocrResult.value = data.text;
+                  let annotation = annotationInput.value;
+                  ocrData.push({ text: data.text, annotation: annotation });
+
+                  let newRow = document.createElement('tr');
+                  let textCell = document.createElement('td');
+                  let annotationCell = document.createElement('td');
+                  let deleteCell = document.createElement('td');
+                  let deleteBtn = document.createElement('span');
+                  deleteBtn.textContent = 'Delete';
+                  deleteBtn.className = 'delete-btn';
+                  deleteBtn.onclick = function() {
+                      // Remove the row from ocrData array
+                      let index = ocrData.findIndex(item => item.text === data.text && item.annotation === annotation);
+                      if (index !== -1) {
+                          ocrData.splice(index, 1);
+                          newRow.remove();
+                      }
+                  };
+                  textCell.textContent = data.text;
+                  annotationCell.textContent = annotation;
+                  deleteCell.appendChild(deleteBtn);
+                  newRow.appendChild(textCell);
+                  newRow.appendChild(annotationCell);
+                  newRow.appendChild(deleteCell);
+                  historyBody.appendChild(newRow);
+
+                  // Save last annotation to local storage
+                  saveLastAnnotation(annotation);
+
+                  // Keep annotation input unchanged
+              }).catch(error => {
+                  console.error('Error during OCR:', error);
+              });
+        });
+
+        saveCsvButton.addEventListener('click', function() {
+            let csvContent = "data:text/csv;charset=utf-8,OCR Result,Annotation\n";
+            ocrData.forEach(row => {
+                let text = row.text.replace(/\n/g, ' ').replace(/,/g, ' '); // Ensure text is in a single cell
+                let annotation = row.annotation.replace(/,/g, ' '); // Ensure annotation is in a single cell
+                csvContent += `${text},${annotation}\n`;
+            });
+            let encodedUri = encodeURI(csvContent);
+            let link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", "ocr_results.csv");
+            document.body.appendChild(link); // Required for FF
+            link.click();
+        });
+    </script>
+</body>
+</html>
